@@ -6,9 +6,10 @@ import io
 
 class Processor:
 
-    def __init__(self, zip_path, options_screener_path=None):
+    def __init__(self, zip_path, options_screener_path=None, iv_source="icharts"):
         self.zip_path = zip_path
         self.options_screener_path = options_screener_path
+        self.iv_source = iv_source.lower() if iv_source else "icharts"
         self.log_callback = print  # Default to print
 
     def set_log_callback(self, callback):
@@ -19,39 +20,80 @@ class Processor:
             self.log_callback(message)
 
     def get_daywise_data(self):
-        """Reads the Daywise Price and OI Summary Excel file and returns a dictionary of Symbol -> {IV, IVP, IVR}."""
+        """Reads the IV data Excel file (iCharts Daywise Report or Opstra IV) and returns Symbol -> {IV, IVP, IVR}."""
         if not self.options_screener_path or not os.path.exists(self.options_screener_path):
             return {}
-        
+
+        symbol_aliases = ("name", "symbol", "ticker")
+        source_configs = {
+            "icharts": {
+                "label": "iCharts Daywise Report",
+                "symbol": symbol_aliases,
+                "iv": ("iv",),
+                "ivp": ("ivp",),
+                "ivr": ("ivr",),
+            },
+            "opstra": {
+                "label": "Opstra IV Data",
+                "symbol": symbol_aliases,
+                "iv": ("iv",),
+                "ivp": ("ivp",),
+                "ivr": ("ivr",),
+            },
+        }
+
+        config = source_configs.get(self.iv_source)
+        if not config:
+            self.log(f"Warning: Unsupported IV source '{self.iv_source}'")
+            return {}
+
         try:
-            self.log(f"Reading Daywise Report: {os.path.basename(self.options_screener_path)}")
-            # Read Excel file
+            self.log(f"Reading {config['label']}: {os.path.basename(self.options_screener_path)}")
             df = pd.read_excel(self.options_screener_path)
-            
-            # Ensure required columns exist
-            # Expected columns: Symbol, IV, IVP, IVR
-            required_cols = ['Symbol', 'IV', 'IVP', 'IVR']
-            missing = [col for col in required_cols if col not in df.columns]
-            
+
+            # Strip whitespace and map lowercase column names to actual column names
+            df.columns = [str(col).strip() for col in df.columns]
+            col_lookup = {col.lower(): col for col in df.columns}
+
+            resolved_cols = {}
+            missing = []
+            for key in ("symbol", "iv", "ivp", "ivr"):
+                candidates = config[key]
+                matched = next((col_lookup[c] for c in candidates if c in col_lookup), None)
+                if matched is None:
+                    missing.append("/".join(candidates))
+                else:
+                    resolved_cols[key] = matched
+
             if missing:
-                self.log(f"Warning: Daywise Report missing columns: {missing}")
+                self.log(f"Warning: {config['label']} missing columns: {missing}")
                 return {}
-            
-            # Create dictionary: Symbol -> {IV, IVP, IVR}
+
+            sym_col = resolved_cols["symbol"]
+            iv_col = resolved_cols["iv"]
+            ivp_col = resolved_cols["ivp"]
+            ivr_col = resolved_cols["ivr"]
+
             data_map = {}
             for _, row in df.iterrows():
-                symbol = row['Symbol']
+                raw_symbol = row[sym_col]
+                if pd.isna(raw_symbol):
+                    continue
+                symbol = str(raw_symbol).strip()
+                if not symbol:
+                    continue
+
                 data_map[symbol] = {
-                    'IV': row['IV'],
-                    'IVP': row['IVP'],
-                    'IVR': row['IVR']
+                    'IV': 0 if pd.isna(row[iv_col]) else row[iv_col],
+                    'IVP': 0 if pd.isna(row[ivp_col]) else row[ivp_col],
+                    'IVR': 0 if pd.isna(row[ivr_col]) else row[ivr_col],
                 }
-            
-            self.log(f"Loaded data for {len(data_map)} symbols from Daywise Report")
+
+            self.log(f"Loaded data for {len(data_map)} symbols from {config['label']}")
             return data_map
-            
+
         except Exception as e:
-            self.log(f"Error reading Daywise Report: {e}")
+            self.log(f"Error reading {config['label']}: {e}")
             return {}
 
     def get_expiries(self):

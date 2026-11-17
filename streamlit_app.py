@@ -24,15 +24,24 @@ def save_uploaded_file(uploaded_file):
 
 def main():
     st.title("Monthly IV Sheet Generator 📈")
-    st.markdown("### Using NSE Bhav Copy and icharts Daywise Reports")
+    st.markdown("### Using NSE Bhav Copy and iCharts / Opstra IV Data")
     st.divider()
 
     # Initialize session state for expiries
     if 'expiries' not in st.session_state:
         st.session_state.expiries = []
+    if 'last_zip_id' not in st.session_state:
+        st.session_state.last_zip_id = None
     
     # --- 1. Upload Files ---
-    st.subheader("📂 1. Upload Files")
+    st.subheader("📂 1. Select Source & Upload Files")
+
+    source_choice = st.radio(
+        "Select IV Data Source",
+        ["iCharts (Daywise OI Summary)", "Opstra (Opstra IV Data)"],
+        horizontal=True
+    )
+    iv_source = "opstra" if source_choice.startswith("Opstra") else "icharts"
     
     col1, col2 = st.columns(2)
     
@@ -40,12 +49,29 @@ def main():
         zip_file = st.file_uploader("Upload Bhav Copy ZIP", type="zip", help="The daily Bhav Copy ZIP file from NSE")
         
     with col2:
-        daywise_file = st.file_uploader("Upload Daywise Report", type="xlsx", help="The Daywise Price and OI Summary Excel file")
+        if iv_source == "opstra":
+            daywise_file = st.file_uploader(
+                "Upload Opstra IV Data",
+                type="xlsx",
+                help="The Opstra IV Excel file (columns: Name, iv, ivp, ivr)"
+            )
+        else:
+            daywise_file = st.file_uploader(
+                "Upload iCharts Daywise Report",
+                type="xlsx",
+                help="The iCharts Daywise Price and OI Summary Excel file (columns: Symbol, IV, IVP, IVR)"
+            )
     
     st.write("") # Spacer
     
     # --- Logic ---
     if zip_file and daywise_file:
+        # Reset cached expiries if a different Bhav Copy ZIP is uploaded
+        current_zip_id = f"{zip_file.name}_{zip_file.size}"
+        if st.session_state.last_zip_id != current_zip_id:
+            st.session_state.expiries = []
+            st.session_state.last_zip_id = current_zip_id
+
         # Save files temporarily
         zip_path = save_uploaded_file(zip_file)
         daywise_path = save_uploaded_file(daywise_file)
@@ -110,7 +136,7 @@ def main():
                             log_text.code("\n".join(logs[-10:]))
                         
                         try:
-                            processor = Processor(zip_path, daywise_path)
+                            processor = Processor(zip_path, daywise_path, iv_source=iv_source)
                             processor.set_log_callback(log_callback)
                             
                             selected_expiry = None if target_expiry == "All Expiries" else target_expiry
